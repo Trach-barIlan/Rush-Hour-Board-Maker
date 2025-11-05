@@ -97,7 +97,7 @@ export default function RushHourBuilder() {
   function exportPython() {
     const lines = cars.map((c, idx) => {
       const orient = c.orient === "H" ? '"H"' : '"V"';
-      return `(${orient}, ${c.length}, ${c.row}, ${c.col})`;
+      return `[${orient}, ${c.length}, ${c.row}, ${c.col}]`;
     });
     const arr = `[\n  ${lines.join(',\n  ')}\n]`;
     const full = `cars = ${arr}`;
