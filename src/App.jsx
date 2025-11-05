@@ -1,63 +1,8 @@
 import React, { useState, useEffect } from "react";
 import "./ui.css";
+import { BOARD_SIZE, insideBoard, cellsForCar, pickColor, textColorFromBg, CELL_SIZE, GRID_GAP } from "./utils";
+import { solveAstar, applyMoveToCars } from "./solver";
 
-// RushHour Board Builder
-// Single-file React component (default export) that renders a 6x6 grid and UI
-// to create cars (orientation H/V, length 2 or 3), place them by clicking the grid,
-// edit/remove cars, mark the target (car 0), and export the board as a Python
-// `cars` list: e.g. [("H", 2, 2, 0), ("V", 3, 0, 0), ...]
-//
-// Usage: paste this component into a React app (Create React App / Vite)
-// - Tailwind CSS classes are used for styling; it will still look OK without Tailwind.
-// - Default board size is 6 but you can change `BOARD_SIZE` constant.
-
-const BOARD_SIZE = 6;
-
-function insideBoard(r, c) {
-  return r >= 0 && c >= 0 && r < BOARD_SIZE && c < BOARD_SIZE;
-}
-
-// Colors used for cars (will cycle when many cars are added)
-const COLOR_PALETTE = [
-  '#ef4444', // red-500
-  '#3b82f6', // blue-500
-  '#10b981', // green-500
-  '#f59e0b', // amber-500
-  '#8b5cf6', // violet-500
-  '#ec4899', // pink-500
-  '#14b8a6', // teal-500
-  '#f97316', // orange-500
-  '#6366f1', // indigo-500
-];
-
-function pickColor(index) {
-  return COLOR_PALETTE[index % COLOR_PALETTE.length];
-}
-
-function textColorFromBg(hex) {
-  // compute luminance of hex color to decide white/black text for contrast
-  if (!hex) return '#fff';
-  const c = hex.replace('#', '');
-  const r = parseInt(c.substring(0, 2), 16) / 255;
-  const g = parseInt(c.substring(2, 4), 16) / 255;
-  const b = parseInt(c.substring(4, 6), 16) / 255;
-  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  return lum > 0.6 ? '#000000' : '#ffffff';
-}
-
-// Board sizing (adjust to make the board larger)
-const CELL_SIZE = 96; // px per cell (increase to make the board bigger)
-const GRID_GAP = 8; // px gap between cells
-
-function cellsForCar(row, col, orient, length) {
-  const cells = [];
-  for (let i = 0; i < length; i++) {
-    const rr = orient === "V" ? row + i : row;
-    const cc = orient === "H" ? col + i : col;
-    cells.push([rr, cc]);
-  }
-  return cells;
-}
 
 export default function RushHourBuilder() {
   const [cars, setCars] = useState([]); // {id, orient, length, row, col, isTarget}
@@ -66,6 +11,11 @@ export default function RushHourBuilder() {
   const [selectedId, setSelectedId] = useState(null);
   const [message, setMessage] = useState("");
   const [exportContent, setExportContent] = useState(null);
+  const [solving, setSolving] = useState(false);
+  const [solution, setSolution] = useState(null); // array of moves {carIdx, delta}
+  const [playIndex, setPlayIndex] = useState(0);
+  const playTimerRef = React.useRef(null);
+  const [initialSnapshot, setInitialSnapshot] = useState(null); // snapshot of cars before solving/playing
 
   useEffect(() => {
     if (cars.length > 0) {
@@ -321,6 +271,28 @@ export default function RushHourBuilder() {
                     setExportContent(py);
                   }} className="btn btn-primary btn-full">Export Python code</button>
 
+                <button onClick={async () => {
+                    setSolving(true);
+                    setSolution(null);
+                    setMessage('Solving...');
+                    // capture initial board snapshot so we can reset later
+                    setInitialSnapshot(cars.map(c => ({ ...c })));
+                    // run solver on current cars
+                    // copy current cars with only essential props
+                    const input = cars.map(c => ({ orient: c.orient, length: c.length, row: c.row, col: c.col, isTarget: c.isTarget }));
+                    await new Promise(r => setTimeout(r, 10)); // yield to UI
+                    const moves = solveAstar(input, 200000);
+                    if (!moves) {
+                      setMessage('No solution found (or search limit reached).');
+                      setSolution(null);
+                      setSolving(false);
+                      return;
+                    }
+                    setMessage(`Solution found: ${moves.length} moves.`);
+                    setSolution(moves);
+                    setSolving(false);
+                  }} className="btn btn-outline btn-full mt-2">Solve</button>
+
                 <button onClick={() => {
                     // quick reset
                     if (!confirm('Remove all cars?')) return;
@@ -352,6 +324,41 @@ export default function RushHourBuilder() {
                   </div>
                 </div>
                 <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', marginTop: 10 }}>{exportContent.replace(/</g,'&lt;')}</pre>
+              </div>
+            )}
+            {solution && (
+              <div className="panel mt-3">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <strong>Solution ({solution.length} moves)</strong>
+                    <div>
+                    <button onClick={() => {
+                      // start play — capture the solution moves so they don't change mid-play
+                      if (!solution || solution.length === 0) return;
+                      if (playTimerRef.current) { clearInterval(playTimerRef.current); playTimerRef.current = null; }
+                      const moves = solution.slice();
+                      setPlayIndex(0);
+                      let idx = 0;
+                      playTimerRef.current = setInterval(() => {
+                        if (idx >= moves.length) { clearInterval(playTimerRef.current); playTimerRef.current = null; return; }
+                        const mv = moves[idx];
+                        if (mv) setCars(prev => applyMoveToCars(prev, mv));
+                        idx += 1;
+                      }, 450);
+                    }} className="btn btn-primary btn-sm">Play</button>
+                    <button onClick={() => { if (playTimerRef.current) { clearInterval(playTimerRef.current); playTimerRef.current = null; } }} className="btn btn-outline btn-sm" style={{ marginLeft: 8 }}>Stop</button>
+                    <button onClick={() => {
+                      if (!initialSnapshot) { setMessage('No snapshot to reset to. Run Solve first.'); return; }
+                      if (playTimerRef.current) { clearInterval(playTimerRef.current); playTimerRef.current = null; }
+                      setCars(initialSnapshot.map(c => ({ ...c })));
+                      setMessage('Board reset to initial snapshot.');
+                    }} className="btn btn-outline btn-sm" style={{ marginLeft: 8 }}>Reset</button>
+                  </div>
+                </div>
+                <ol style={{ marginTop: 10 }}>
+                  {solution.map((m, i) => (
+                    <li key={i}>Car {m.carIdx} {m.delta>0? '→' : '←'}</li>
+                  ))}
+                </ol>
               </div>
             )}
           </div>
